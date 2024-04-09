@@ -4,7 +4,11 @@ use pyo3::exceptions::{ModuleNotFoundError, PyException};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, prelude::*, BufReader};
 use std::io::Result;
+use std::path::Path;
+use std::process::Command;
 
 //
 // Constants
@@ -1402,11 +1406,212 @@ fn update_state(state: &mut State) {
     state.update_player_king_checked(Color::Black, &squares_under_attack_by_white);
 }
 
+fn to_fen(state: State) -> String {
+    let mut fen = String::new();
+  
+    // Loop through each rank (row)
+    for rank in (0..8) {
+      let mut empty_squares = 0;
+      for file in 0..8 {
+        let piece_code = state.board[rank][file];
+        let piece = match piece_code as i32 {
+          value => get_piece_char(value)
+        };
+        if piece != '.' {
+          if empty_squares > 0 {
+            fen.push_str(&empty_squares.to_string());
+            empty_squares = 0;
+          }
+          fen.push(piece);
+        } else {
+          empty_squares += 1;
+        }
+      }
+      if empty_squares > 0 {
+        fen.push_str(&empty_squares.to_string());
+      }
+      if rank < 7{
+        fen.push('/');
+      }
+    }
+  
+    // Add current player
+    fen.push(' ');
+    fen.push(match state.current_player {
+        Color::White => 'w',
+        Color::Black => 'b',
+        _ => panic!("Invalid current player"),
+    });
+
+    // Add castling rights
+    fen.push(' ');
+    let mut castling = String::new();
+    if state.white_king_castle_is_possible == true {
+      castling.push('K');
+    }
+    if state.white_queen_castle_is_possible == true {
+      castling.push('Q');
+    }
+    if state.black_king_castle_is_possible == true {
+      castling.push('k');
+    }
+    if state.black_queen_castle_is_possible == true {
+      castling.push('q');
+    }
+    if castling.is_empty() {
+      fen.push('-');
+    } else {
+      fen.push_str(&castling);
+    }
+  
+    // Add en passant target square (omitted here for simplicity)
+    fen.push(' ');
+    fen.push('-');
+  
+    // Add halfmove clock (omitted here for simplicity)
+    fen.push(' ');
+    fen.push('0');
+  
+    // Add fullmove number
+    fen.push(' ');
+    fen.push('1');
+  
+    fen
+  }
+  
+  fn get_piece_char(code: i32) -> char {
+    match code {
+      1 => 'K',
+      2 => 'Q',
+      3 => 'R',
+      4 => 'B',
+      5 => 'N',
+      6 => 'P',
+      0 => '.',
+     -1 => 'k',
+     -2 => 'q',
+     -3 => 'r',
+     -4 => 'b',
+     -5 => 'n',
+     -6 => 'p',
+      _ => panic!("Invalid piece code"),
+    }
+  }
+  
+
 // Function to evaluate the score of a state for a player
 fn evaluate(state: &State, player: Color) -> isize {
     // Implement logic to evaluate the state for the given player (maximize for player, minimize for opponent)
+    // let fen_str = to_fen(*state);
+    // let output = Command::new("python")
+    //     .arg("./src/evaluate.py")
+    //     .arg(fen_str)
+    //     .output()
+    //     .expect("failed to execute process");
     
-    return 1;
+    // let mut score = 0;
+    // if !output.status.success() {
+    //     let exit = output.status.code().unwrap_or(1);
+    //     score = exit as isize;
+    // }
+
+    // return score;
+    let mut score = 0;
+
+    // Material evaluation (piece values)
+    for rank in 0..8 {
+      for file in 0..8 {
+        if let piece = (*state).board[rank][file] {
+          score += get_value(piece) * if get_color(piece) == Some(player as Color) {
+            1
+          } else {
+            -1
+          };
+        }
+      }
+    }
+  
+    // Simple positional evaluation (pawns)
+    for rank in 2..6 {
+      for file in 0..8 {
+        if let piece = (*state).board[rank][file] {
+          if piece == 6 || piece == -6 {
+            let pawn_rank_bonus = match get_color(piece) {
+              Some(Color::White) => rank - 1,
+              Some(Color::Black) => 6 - rank,
+              _ => 0,
+            } as i32;
+            score += pawn_rank_bonus * if get_color(piece) == Some(player as Color) {
+                1
+                } else {
+                -1
+                
+            };
+          }
+        }
+      }
+    }
+  
+    // Additional positional factors (basic example)
+    for rank in 0..8 {
+      for file in 0..8 {
+        if let piece = (*state).board[rank][file] {
+          if get_color(piece) == Some(player as Color) {
+            // Center control bonus
+            if (rank == 3 || rank == 4) && (file == 3 || file == 4) {
+              score += 10;
+            }
+            // Mobility bonus (very simple example)
+            score += get_mobility(piece,state,(rank,file)) * if get_color(piece) == Some(player as Color){
+                1
+                } else {
+                -1
+            };
+          }
+        }
+      }
+    }
+  
+    score as isize
+}
+
+fn get_mobility(piece: isize, state: &State,position: (usize,usize)) -> i32 {
+    let mut mobility = 0;
+    for rank_delta in -1..=1 {
+      for file_delta in -1..=1 {
+        let new_rank = (position.0 as i32) + rank_delta;
+        let new_file = (position.1 as i32) + file_delta;
+        if 0 <= new_rank && new_rank < 8 && 0 <= new_file && new_file < 8 {
+          if (*state).board[new_rank as usize][new_file as usize] == 0
+             || get_color((*state).board[new_rank as usize][new_file as usize]) != get_color(piece) {
+            mobility += 1;
+          }
+        }
+      }
+    }
+    mobility
+  }
+
+fn get_value(piece: isize) -> i32 {
+    match piece.abs() {
+      6 => 100, // pawn
+      5 => 300, // knight
+      4 => 325, // bishop
+      3 => 500, // rook
+      2 => 900, // queen
+      1 => 20000, // King is very valuable (essentially infinite in the endgame)
+        _ => 0,
+    }
+}
+
+fn get_color(piece: isize) -> Option<Color> {
+    if piece > 0 {
+      return Some(Color::White);
+    } else if piece < 0 {
+      return Some(Color::Black);
+    } else {
+      return None;
+    }
 }
 
 // Recursive minimax function
@@ -1426,7 +1631,12 @@ fn _minimax(state: &State, player: Color, depth: u32, mut alpha: isize, mut beta
     all_moves.append(&mut all_castle_moves);
     let size = all_moves.len();
     if  size == 0 || depth == 0 {
-        return (evaluate(state, player), None);
+        let score = evaluate(state, player);
+        if max == Color::White {
+            return (score, None);
+        } else {
+            return (-score, None);
+        }
     }
     let min = if max == Color::White { Color::Black } else { Color::White };
     let mut best_score = if player == max { isize::MIN } else { isize::MAX };
@@ -1530,10 +1740,12 @@ impl ChessEngine {
         // parse arguments
         let player: Color = player_string_to_enum(_player);
 
-        let (moves, castle_moves): (Vec<Move>, Vec<Castle>) =
+        let (mut moves, castle_moves): (Vec<Move>, Vec<Castle>) =
             get_all_possible_moves(&state, player, attack);
-        // let moves: Vec<Move> = get_possible_moves(&state, player, attack);
+        // let moves: Vec<Move>le_moves(&st = get_possibate, player, attack);
         // let castle_moves: Vec<Castle> = get_possible_castle_moves(&state, player, attack);
+
+        moves.retain(|_move: &Move| !move_leaves_king_checked(&state, player, *_move));
 
         let mut moves_str: Vec<String> = moves.iter().map(|&x| convert_move_to_string(x)).collect();
         let castle_moves_str: Vec<String> = castle_moves
@@ -1584,6 +1796,9 @@ impl ChessEngine {
     ) -> PyResult<Py<PyTuple>> {
         // parse state
         let state: State = convert_py_state(_py, state_py)?;
+        // let data = to_fen(state);
+        // let mut file = File::create("fen.txt")?;
+        // file.write_all(data.as_bytes())?;
 
         // parse arguments
         let player: Color = player_string_to_enum(player);

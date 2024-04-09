@@ -4,20 +4,20 @@ import random
 import numpy as np
 
 def opponent_move(env):
-    return env.minimax(depth=5)
+    return env.minimax(depth=3)
 
 env = ChessEnvV2(player_color='white', opponent=opponent_move,log=True)
 
-while(not env.done):
+done = False
+while(not done):
     env.render()
-    moves = env.possible_moves
-    if(env.done == True or len(moves) == 0):
+    moves = env.get_possible_moves(env.state, env.current_player)
+    if(done == True or len(moves) == 0):
         print("Game Over")
         exit()
-    print("Possible moves: ", moves)
-    print("Enter move: ")
-    input_move = int(input())
+    input_move = random.randint(0, len(moves)-1)
     move = moves[input_move]
     action = env.move_to_action(move)
     new_state, reward, done, info = env.step(action)
     
+print("Game Over")
